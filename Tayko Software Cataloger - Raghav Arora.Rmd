@@ -1,0 +1,242 @@
+---
+title: "Tayko Software Cataloger"
+author: "Raghav Arora"
+date: "2023-05-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##Assignment of Tayko
+
+```{r}
+Tayko.com <- read.csv("Tayko.csv",header=TRUE)
+head(Tayko.com)
+dim(Tayko.com)
+
+```
+
+1. Each catalog costs approximately $2 to mail (including printing, postage,
+and mailing costs). Estimate the gross profit that the firm could expect
+from the remaining 180,000 names if it selects them randomly from the
+pool.
+
+```{r}
+#gross_profit <- cost_per_mail * response_rate * average_spend * number_of_left_entries
+cost_per_mail <- 2
+response_rate <- 0.053
+number_of_left_entries <- 180000
+average_spend <- mean(Tayko.com[Tayko.com$Purchase==1,]$Spending)
+gross_profit <- (average_spend * response_rate - cost_per_mail) * number_of_left_entries
+gross_profit
+
+```
+
+
+2. Develop a model for classifying a customer as a purchaser or non-purchaser.
+
+a. Partition the data randomly into a training set (800 records), validation
+set (700 records), and test set (500 records).
+
+```{r}
+#Droped last_update_days_ago & 1st_update_days_ago but kept sequence_number required as purchaseID
+Tayko.com <- Tayko.com[,-c(19,20)]
+set.seed(1)
+train_rows <- sample(rownames(Tayko.com),dim(Tayko.com)[1]*0.4)
+valid_rows <- sample(setdiff(rownames(Tayko.com),train_rows),dim(Tayko.com)[1]*0.35)
+test_rows <- setdiff(rownames(Tayko.com),union(train_rows,valid_rows))
+train.data <- Tayko.com[train_rows,] # 800
+valid.data <- Tayko.com[valid_rows,] # 700
+test.data <- Tayko.com[test_rows,] # 500
+
+```
+
+
+b. Run step-wise logistic regression using backward elimination to select
+the best subset of variables, then use this model to classify the data into
+purchasers and non-purchasers. Use only the training set for running
+the model. (Logistic regression is used because it yields an estimated
+“probability of purchase,” which is required later in the analysis.)
+
+```{r}
+#Drop spending from variables
+lr_model <- glm(Purchase ~ .-Spending, data = train.data, family = binomial);
+lr_model_b <- step(lr_model, direction = "backward");
+```
+
+```{r}
+
+library(caret)
+summary(lr_model_b)
+prediction <- predict(lr_model_b, train.data, type = "response")
+classification <- ifelse(prediction > 0.5, 1, 0)
+confusionMatrix(factor(classification),factor(train.data$Purchase))
+```
+
+
+3. Develop a model for predicting spending among the purchasers.
+
+a. Create a vector of ID’s of only purchasers’ records (Purchase = 1).
+
+```{r}
+# Only include purchase
+purchaser <- Tayko.com[Tayko.com$Purchase == 1, ]
+purchaser_id <- purchaser$sequence_number
+purchaser_id
+```
+
+
+b. Partition this dataset into the training and validation records. (Use the
+same training/validation labels from the earlier partitioning; one way
+is to use function intersect() to find IDs of purchasers in the original
+partitions).
+
+```{r}
+train_rows <- intersect(train.data$sequence_number, Tayko.com[Tayko.com$Purchase == 1, ]$sequence_number)
+valid_rows <- intersect(valid.data$sequence_number, Tayko.com[Tayko.com$Purchase == 1, ]$sequence_number)
+train.data <- Tayko.com[Tayko.com$sequence_number %in% train_rows, ]
+valid.data <- Tayko.com[Tayko.com$sequence_number %in% valid_rows, ]
+```
+
+
+c. Develop models for predicting spending, using:
+i. Multiple linear regression (use stepwise regression)
+
+```{r}
+lm_model <- lm(Spending ~ ., data = train.data)
+lm_model <- step(lm_model) 
+```
+
+
+```{r}
+lm_model <- lm(Spending ~ ., data = valid.data)
+lm_model <- step(lm_model) 
+```
+
+
+
+```{r}
+# For the Presentation
+plot(lm_model)
+```
+
+ii. Regression trees
+```{r}
+library(rpart)
+tree_model <- rpart(Spending ~ ., data = train.data)
+tree_model
+summary(tree_model)
+```
+
+
+```{r}
+tree_model <- rpart(Spending ~ ., data = valid.data)
+tree_model
+summary(tree_model)
+```
+
+
+d. Choose one model on the basis of its performance on the validation
+data.
+
+```{r}
+# make predictions using multiple linear
+lm_predictions <- predict(lm_model, valid.data)
+# Calculate RMSE
+lm_rmse <- sqrt(mean((valid.data$Spending - lm_predictions) ^ 2))
+# make predictions using regression tree
+tree_predictions <- predict(tree_model, valid.data)
+#calculate RMSE 
+tree_rmse <- sqrt(mean((valid.data$Spending - tree_predictions) ^ 2))
+
+```
+
+
+```{r}
+if (lm_rmse < tree_rmse) { "lm" } else{"tree"}
+# if (lm_rmse < tree_rmse) {chosen_model <- lm_model} else{chosen_model <- tree_model}
+# chosen_model
+```
+
+
+4. Return to the original test data partition. Note that this test data partition
+includes both purchasers and non-purchasers. Create a new data frame
+called Score Analysis that contains the test data portion of this data-set.
+```{r}
+score_analysis <- test.data
+```
+
+
+
+a. Add a column to the data frame with the predicted scores from the
+logistic regression.
+
+```{r}
+score_analysis$lr_prediction <- predict(lr_model_b, newdata = score_analysis)
+```
+
+
+b. Add another column with the predicted spending amount from he
+prediction model chosen.
+
+```{r}
+score_analysis$lm_prediction <- predict(lm_model, newdata = score_analysis)
+```
+
+
+c. Add a column for “adjusted probability of purchase” by multiplying
+“predicted probability of purchase” by 0.107. This is to adjust for oversampling the purchasers (see earlier description).
+
+```{r}
+score_analysis$adjusted_probability_purchase <-score_analysis$lr_prediction * 0.107
+```
+
+
+d. Add a column for expected spending: adjusted probability of purchase
+× predicted spending.
+```{r}
+score_analysis$expected_spending <-score_analysis$adjusted_probability_purchase * score_analysis$lm_prediction
+```
+
+
+e. Plot the lift chart of the expected spending.
+
+
+```{r}
+Spending <- score_analysis$Spending-2
+exp_spending <-score_analysis$expected_spending-2
+
+library(gains)
+gain <- gains(Spending, exp_spending)# predictions
+# cumulative lift chart
+options(scipen=999) # avoid scientific notation
+# we will compute the gain relative to price
+
+plot(c(0,gain$cume.pct.of.total*sum(Spending))~c(0,gain$cume.obs),
+xlab="Customer", ylab="Cumulative Spending", main="Lift Chart", type="l")
+# baseline
+lines(c(0,sum(Spending))~c(0,dim(score_analysis)[1]), col="gray", lty=2)
+```
+
+
+
+f. Using this lift curve, estimate the gross profit that would result from
+mailing to the 180,000 names on the basis of your data mining models.
+
+```{r}
+factor <- 5000000/500 
+
+plot(c(0,factor * gain$cume.pct.of.total*sum(Spending))~c(0,factor*gain$cume.obs),
+xlab="Customer", ylab="Cumulative Spending", main="Lift Chart", type="l")
+
+```
+```{r}
+final_gross_profit <- approx(c(0,factor*gain$cume.obs), c(0,factor * gain$cume.pct.of.total*sum(Spending)), xout=180000)
+final_gross_profit
+       
+```
+
+
